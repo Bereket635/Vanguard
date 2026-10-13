@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vanguard — AD Path Analyzer</title>
+<style>
+  :root {
+    --bg:#0f1216; --panel:#161b22; --panel2:#1c232c; --border:#2a323d;
+    --fg:#e6edf3; --muted:#8b98a5; --accent:#4ea1ff; --accent2:#2f81f7;
+    --high:#ff6b6b; --review:#f0b429; --ok:#4ade80; --warn:#f0b429;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif;
+  }
+  header {
+    border-bottom:1px solid var(--border); padding:14px 18px;
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    background:linear-gradient(180deg,#141a22,#0f1216);
+    position:sticky; top:0; z-index:5;
+  }
+  header h1 { margin:0; font-size:18px; letter-spacing:.3px; }
+  .badge {
+    display:inline-block; padding:2px 8px; border-radius:10px;
+    font-size:11px; font-weight:600; text-transform:uppercase;
+    letter-spacing:.5px; border:1px solid var(--border); color:var(--muted);
+  }
+  .badge.running { color:#7cc4ff; border-color:#2f5480; background:#0f1c2c; }
+  .badge.done    { color:var(--ok);  border-color:#155e3b; background:#0f2419; }
+  .badge.error   { color:var(--high); border-color:#7a2b2b; background:#2a1414; }
+  .badge.demo    { color:#c4b5fd; border-color:#4c3d8a; background:#1e1a33; }
+  main { padding:18px; max-width:1100px; margin:0 auto; }
+  section { margin-bottom:20px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px;
+       color:var(--muted); margin:0 0 10px; }
+  .panel { background:var(--panel); border:1px solid var(--border);
+           border-radius:10px; padding:14px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
+  .card { background:var(--panel2); border:1px solid var(--border);
+          border-radius:8px; padding:12px; text-align:center; }
+  .card .n { font-size:22px; font-weight:700; color:var(--accent); }
+  .card .l { color:var(--muted); font-size:11px; text-transform:uppercase;
+             letter-spacing:.5px; margin-top:4px; }
+  input[type=file], input[type=number], input[type=text] {
+    color:var(--fg); background:var(--panel2); border:1px solid var(--border);
+    padding:7px 9px; border-radius:7px; font:inherit;
+  }
+  input[type=file] { border-style:dashed; flex:1; min-width:180px; }
+  button {
+    background:var(--accent2); color:#fff; border:0; padding:8px 14px;
+    border-radius:8px; cursor:pointer; font-weight:600; font-size:13px;
+    font-family:inherit;
+  }
+  button.secondary { background:var(--panel2); border:1px solid var(--border); color:var(--fg); }
+  button:hover { filter:brightness(1.1); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .muted { color:var(--muted); font-size:12px; }
+  .flash { padding:10px 14px; border-radius:8px; margin-bottom:12px;
+           border:1px solid var(--border); background:var(--panel2); font-size:13px; }
+  .flash.success { border-color:#155e3b; background:#0f2419; color:#bff5d4; }
+  .flash.error   { border-color:#7a2b2b; background:#2a1414; color:#ffd4d4; }
+  .finding { border:1px solid var(--border); border-radius:10px;
+             padding:12px; margin-bottom:8px; background:var(--panel); }
+  .finding.High   { border-left:4px solid var(--high); }
+  .finding.Review { border-left:4px solid var(--review); }
+  .finding .head { display:flex; justify-content:space-between;
+                   align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .finding .risk { font-size:10px; padding:2px 8px; border-radius:8px;
+                   text-transform:uppercase; font-weight:700; letter-spacing:.5px; }
+  .finding.High .risk   { background:#3a1414; color:var(--high); border:1px solid #7a2b2b; }
+  .finding.Review .risk { background:#3a2e0e; color:var(--review); border:1px solid #7a5c12; }
+  .path { font-family:ui-monospace, Consolas, monospace; font-size:12px;
+          color:var(--fg); margin:6px 0; word-break:break-word; }
+  .path .arrow { color:var(--muted); margin:0 5px; }
+  .rel { font-size:11px; color:var(--muted); margin-top:4px; }
+  .rel code { background:#0d1117; padding:1px 5px; border-radius:4px;
+              color:#ffb86c; border:1px solid var(--border); }
+  ul.notes { margin:0; padding-left:18px; color:var(--muted); font-size:12.5px; }
+  ul.notes li { margin:3px 0; }
+  pre { background:#0d1117; border:1px solid var(--border); padding:10px;
+        border-radius:8px; overflow:auto; max-height:360px; font-size:12px; }
+  footer { text-align:center; color:var(--muted); font-size:11.5px;
+           padding:18px; border-top:1px solid var(--border); margin-top:30px; }
+  code { background:#0d1117; padding:1px 5px; border-radius:4px;
+         color:#ffb86c; border:1px solid var(--border); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vanguard</h1>
+  <span class="badge" id="statusBadge">idle</span>
+  <span class="muted" style="margin-left:auto">
+    API key: <input type="text" id="apiKey" placeholder="(dev mode)" style="width:130px">
+  </span>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <section>
+    <h2>Stage 1 — AD Discovery</h2>
+    <div class="panel">
+      <div class="row">
+        <input type="file" id="fileInput" accept=".json,.zip">
+        <button id="uploadBtn">Upload &amp; run pipeline</button>
+        <button id="demoBtn" class="secondary">Load demo</button>
+      </div>
+      <p class="muted" style="margin:10px 0 0">
+        Accepts normalized graph JSON, BloodHound/SharpHound collection JSON, or a ZIP of either.
+        Max 80 MB. Files are parsed in memory.
+      </p>
+    </div>
+  </section>
+
+  <section id="summaryPanel" hidden>
+    <h2>Summary</h2>
+    <div class="grid" id="summaryGrid"></div>
+  </section>
+
+  <section id="findingsPanel" hidden>
+    <h2>Stage 2 — Findings</h2>
+    <div id="findingsList"></div>
+  </section>
+
+  <section id="planPanel" hidden>
+    <h2>Stage 3 &amp; 4 — Remediation Plan</h2>
+    <div class="panel">
+      <p class="muted" id="planInfo"></p>
+      <p class="muted">Generated PowerShell is written to <code>stage4_output/</code>.
+         Review it before running on a domain host. No changes have been made.</p>
+    </div>
+  </section>
+
+  <section id="criticalPanel" hidden>
+    <h2>Critical relationships</h2>
+    <div class="panel">
+      <div id="criticalList"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Stage 5 — Verify (before / after)</h2>
+    <div class="panel">
+      <div class="row">
+        <input type="number" id="beforeId" placeholder="before export id" style="width:150px">
+        <input type="number" id="afterId"  placeholder="after export id"  style="width:150px">
+        <button id="verifyBtn">Compare</button>
+      </div>
+      <pre id="verifyOut" hidden></pre>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Vanguard AD Path Analyzer &middot; loopback-only &middot; no live AD connection &middot;
+  recommendations only, no changes applied
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+
+  function setStatus(text, kind) {
+    const el = $("statusBadge");
+    el.textContent = text;
+    el.className = "badge" + (kind ? " " + kind : "");
+  }
+
+  function flash(msg, kind) {
+    const box = $("flash");
+    if (!msg) { box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="flash ${kind || ""}">${escapeHtml(msg)}</div>`;
+    if (kind === "success") setTimeout(() => { box.innerHTML = ""; }, 5000);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[c]));
+  }
+
+  function apiKey() { return $("apiKey").value.trim(); }
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers || {});
+    const k = apiKey();
+    if (k) headers["X-API-Key"] = k;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch (e) { data = { raw: text }; }
+    if (!res.ok) {
+      const msg = data.error || data.detail || data.raw || ("HTTP " + res.status);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  function renderSummary(summary) {
+    $("summaryPanel").hidden = false;
+    const items = [
+      ["Nodes", summary.node_count],
+      ["Edges", summary.edge_count],
+      ["Priv targets", summary.privileged_target_count],
+      ["Start nodes", summary.start_count],
+      ["Findings", summary.path_count],
+    ];
+    $("summaryGrid").innerHTML = items.map(([l, n]) =>
+      `<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`
+    ).join("");
+  }
+
+  function shortName(id) {
+    // SIDs are long; show the last dash-separated token for readability.
+    if (!id) return "?";
+    const s = String(id);
+    if (s.length > 20 && s.includes("-")) return s.split("-").pop();
+    return s;
+  }
+
+  function renderFindings(findings) {
+    $("findingsPanel").hidden = false;
+    if (!findings || !findings.length) {
+      $("findingsList").innerHTML =
+        '<div class="panel muted">No paths from a start node to a privileged target ' +
+        'were found within the search limits. That is not proof of safety.</div>';
+      return;
+    }
+    $("findingsList").innerHTML = findings.map((f) => {
+      const nodes = (f.path || []).map(shortName).join('<span class="arrow">→</span>');
+      const rels = (f.edges || []).map((e) =>
+        `<code>${escapeHtml(e.relationship || "?")}</code>`
+      ).join(" · ");
+      return `
+        <div class="finding ${f.risk}">
+          <div class="head">
+            <div><b>${escapeHtml(shortName(f.start_id))}</b>
+                 <span class="arrow">→</span>
+                 <b>${escapeHtml(shortName(f.target_id))}</b>
+                 <span class="muted"> · score ${f.score} · ${f.path.length - 1} hop(s)</span></div>
+            <span class="risk">${escapeHtml(f.risk)}</span>
+          </div>
+          <div class="path">${nodes}</div>
+          <div class="rel">${rels}</div>
+        </div>`;
+    }).join("");
+  }
+
+  function renderCritical(edges) {
+    if (!edges || !edges.length) return;
+    $("criticalPanel").hidden = false;
+    $("criticalList").innerHTML = edges.map((e) => `
+      <div class="rel" style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <code>${escapeHtml(e.relationship)}</code>
+        ${escapeHtml(shortName(e.source))} → ${escapeHtml(shortName(e.target))}
+        <span class="muted">(centrality ${e.centrality})</span>
+      </div>`).join("");
+  }
+
+  function renderPlan(plan) {
+    $("planPanel").hidden = false;
+    $("planInfo").innerHTML =
+      `${plan.action_count} action(s) proposed.<br>` +
+      `Apply script: <code>${escapeHtml(plan.apply_script)}</code><br>` +
+      `Rollback script: <code>${escapeHtml(plan.rollback_script)}</code>`;
+  }
+
+  function renderAll(result) {
+    renderSummary(result.summary);
+    renderFindings(result.findings);
+    renderCritical(result.critical_edges);
+    renderPlan(result.plan);
+  }
+
+  async function runPipeline(fn) {
+    setStatus("running", "running");
+    flash("");
+    try {
+      const result = await fn();
+      renderAll(result);
+      setStatus("done", "done");
+      flash(`Pipeline complete. Run ID ${result.run_id}, ` +
+            `${result.summary.path_count} finding(s).`, "success");
+    } catch (e) {
+      setStatus("error", "error");
+      flash("Error: " + e.message, "error");
+    }
+  }
+
+  $("uploadBtn").addEventListener("click", () => {
+    const f = $("fileInput").files[0];
+    if (!f) { flash("Choose a file first.", "error"); return; }
+    runPipeline(async () => {
+      const fd = new FormData();
+      fd.append("file", f);
+      return api("/api/exports", { method: "POST", body: fd });
+    });
+  });
+
+  $("demoBtn").addEventListener("click", () => {
+    runPipeline(() => api("/api/demo", { method: "POST" }));
+  });
+
+  $("verifyBtn").addEventListener("click", async () => {
+    const b = $("beforeId").value;
+    const a = $("afterId").value;
+    if (!b || !a) { flash("Enter both export IDs.", "error"); return; }
+    setStatus("verifying", "running");
+    try {
+      const r = await api(`/api/verify?before=${encodeURIComponent(b)}&after=${encodeURIComponent(a)}`);
+      const out = $("verifyOut");
+      out.hidden = false;
+      out.textContent = JSON.stringify(r, null, 2);
+      setStatus("done", "done");
+    } catch (e) {
+      setStatus("error", "error");
+      flash("Verify error: " + e.message, "error");
+    }
+  });
+
+  // Poll health on load so the badge reflects the server state.
+  fetch("/api/health").then((r) => r.json()).then(() => {
+    setStatus("idle");
+  }).catch(() => {
+    setStatus("offline", "error");
+  });
+})();
+</script>
+</body>
+</html>

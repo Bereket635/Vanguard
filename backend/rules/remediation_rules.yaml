@@ -1,0 +1,153 @@
+# Vanguard rules engine (Stage 3).
+# Each rule matches a finding and proposes a fix. Lowest cost wins.
+
+risk_weights:
+  GenericAll: 1.0
+  GenericWrite: 0.95
+  WriteDacl: 0.95
+  WriteOwner: 0.9
+  AllExtendedRights: 0.85
+  ForceChangePassword: 0.9
+  AddMember: 0.85
+  GetChangesAll: 1.0
+  GetChanges: 0.9
+  AllowedToAct: 0.85
+  AllowedToDelegate: 0.8
+  AdminTo: 0.6
+  CanRDP: 0.3
+  HasSession: 0.4
+  MemberOf: 0.2
+  GPLink: 0.5
+  RBCD: 0.85
+
+blast_radius:
+  # How disruptive the fix is to the business.
+  low: 1
+  medium: 3
+  high: 5
+
+fixes:
+  - id: remove_excess_group_membership
+    matches_relationship: MemberOf
+    matches_risk: [High, Review]
+    kind: RemoveMember
+    blast_radius: low
+    description: Remove the principal from the group if membership is not required.
+    pre_checks:
+      - Confirm the principal is not a service account with a business need.
+      - Confirm group is not required for the principal's role.
+    rollback:
+      - "Add-ADGroupMember -Identity <group> -Members <principal>"
+    ps_apply: |
+      Remove-ADGroupMember -Identity "<group>" -Members "<principal>" -Confirm:$false
+    ps_rollback: |
+      Add-ADGroupMember -Identity "<group>" -Members "<principal>"
+
+  - id: remove_generic_all_ace
+    matches_relationship: GenericAll
+    matches_risk: [High]
+    kind: RemoveDaclAce
+    blast_radius: medium
+    description: Remove the offending ACE from the target object.
+    pre_checks:
+      - Verify the ACE is not required for a documented delegation.
+      - Check for change ticket or owner approval.
+    rollback:
+      - Re-add the exact ACE from the captured SD.
+    ps_apply: |
+      $acl = Get-Acl "AD:<target_dn>"
+      $acl.Access | Where-Object { $_.IdentityReference -like "*<principal>*" -and $_.ActiveDirectoryRights -match "GenericAll" } |
+        ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+      Set-Acl "AD:<target_dn>" $acl
+    ps_rollback: |
+      # Restore from Stage 4 backup JSON captured at apply time.
+
+  - id: remove_write_dacl
+    matches_relationship: WriteDacl
+    matches_risk: [High]
+    kind: RemoveDaclAce
+    blast_radius: medium
+    description: Remove WriteDacl from the offending principal.
+    pre_checks: ["Confirm no documented delegation requires this ACE."]
+    rollback: ["Restore SD from Stage 4 backup."]
+    ps_apply: |
+      $acl = Get-Acl "AD:<target_dn>"
+      $acl.Access | Where-Object { $_.IdentityReference -like "*<principal>*" -and $_.ActiveDirectoryRights -match "WriteDacl" } |
+        ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+      Set-Acl "AD:<target_dn>" $acl
+    ps_rollback: |
+      # Restore from backup.
+
+  - id: remove_force_change_password
+    matches_relationship: ForceChangePassword
+    matches_risk: [High]
+    kind: RemoveDaclAce
+    blast_radius: medium
+    description: Remove extended right that allows resetting the target's password.
+    pre_checks: ["Confirm no helpdesk workflow requires this."]
+    rollback: ["Restore SD from backup."]
+    ps_apply: |
+      $acl = Get-Acl "AD:<target_dn>"
+      $acl.Access | Where-Object { $_.IdentityReference -like "*<principal>*" -and $_.ObjectType -eq "00299570-246d-11d0-a768-00aa006e0529" } |
+        ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+      Set-Acl "AD:<target_dn>" $acl
+    ps_rollback: ""
+
+  - id: remove_unconstrained_delegation
+    matches_relationship: AllowedToDelegate
+    matches_risk: [High]
+    kind: RemoveDelegation
+    blast_radius: high
+    description: Remove unconstrained delegation from the account or computer.
+    pre_checks:
+      - Confirm this is not a Tier-0 tiering or KCD requirement.
+      - Coordinate with application owners.
+    rollback: ["Re-enable TrustedForDelegation flag."]
+    ps_apply: |
+      Set-ADAccountControl -Identity "<principal>" -TrustedForDelegation $false
+    ps_rollback: |
+      Set-ADAccountControl -Identity "<principal>" -TrustedForDelegation $true
+
+  - id: remove_rbcd
+    matches_relationship: RBCD
+    matches_risk: [High]
+    kind: RemoveRBCD
+    blast_radius: high
+    description: Clear Resource-Based Constrained Delegation on the target.
+    pre_checks: ["Confirm the RBCD was not intentionally set by a Tier-0 team."]
+    rollback: ["Restore msDS-AllowedToActOnBehalfOfOtherIdentity from backup."]
+    ps_apply: |
+      Set-ADComputer -Identity "<target>" -Clear 'msDS-AllowedToActOnBehalfOfOtherIdentity'
+    ps_rollback: ""
+
+  - id: remove_local_admin
+    matches_relationship: AdminTo
+    matches_risk: [High, Review]
+    kind: RemoveLocalAdmin
+    blast_radius: low
+    description: Remove the principal from local Administrators on the target host.
+    pre_checks: ["Confirm host still has another admin path."]
+    rollback: ["Re-add via Invoke-Command Remove-LocalGroupMember."]
+    ps_apply: |
+      Invoke-Command -ComputerName "<target>" -ScriptBlock {
+        Remove-LocalGroupMember -Group "Administrators" -Member "<principal>"
+      }
+    ps_rollback: |
+      Invoke-Command -ComputerName "<target>" -ScriptBlock {
+        Add-LocalGroupMember -Group "Administrators" -Member "<principal>"
+      }
+
+  - id: disable_stale_principal
+    matches_relationship: "*"
+    matches_risk: [High]
+    kind: DisableAccount
+    blast_radius: high
+    description: Last resort — disable the principal if removal is not possible.
+    pre_checks:
+      - "Confirm the account is not a service account in use."
+      - "Obtain incident authorization."
+    rollback: ["Enable-ADAccount -Identity <principal>"]
+    ps_apply: |
+      Disable-ADAccount -Identity "<principal>"
+    ps_rollback: |
+      Enable-ADAccount -Identity "<principal>"
